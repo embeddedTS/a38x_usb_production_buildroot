@@ -9,6 +9,27 @@ mkdir /tmp/logs
 ts7800ctl -n
 ts7800ctl -g
 
+### FPGA ###
+ls /mnt/usb/ts7800-fpga-*.rpd > /dev/null 2>&1
+if [ "$?" = "0" ]; then
+	FPGAFILE=$(ls /mnt/usb/ts7800-fpga*.rpd)
+	NEWREV=${FPGAFILE%.rpd}
+	NEWREV=${NEWREV:24}
+
+	eval $(ts7800ctl -i)
+	fpga_rev=$(printf "%d\n" $fpga_rev)
+
+	if [ "$fpga_rev" -lt "$NEWREV" ]; then
+		echo "FPGA $fpga_rev is out of date, updating to $NEWREV and rebooting"
+		load_fpga_flash $FPGAFILE 
+		# No point to verify.  If it works we will come back 
+		# around after a reboot and pass.  If it fails, we can't
+		# recover, or even blink the leds since they are on the fpga
+		# This should only happen if there is a power interruption while programming anyway
+		reboot -f
+	fi
+fi
+
 ### MicroSD ###
 if [ -e /mnt/usb/sdimage.tar.xz ]; then
 	echo "======= Writing SD card filesystem ========"
@@ -29,17 +50,17 @@ EOF
 			echo "fdisk tssdcard" >> /tmp/failed
 		fi
 
-		mkfs.ext4 -O ^metadata_csum,^64bit /dev/mmcblk1p1 -q < /dev/null
+		mkfs.ext4 /dev/tssdcarda1 -q < /dev/null
 		if [ $? != 0 ]; then
-			echo "mke2fs mmcblk1" >> /tmp/failed
+			echo "mke2fs tssdcarda" >> /tmp/failed
 		fi
-		mount /dev/mmcblk1p1 /mnt/sd/
+		mount /dev/tssdcarda1 /mnt/sd/
 		if [ $? != 0 ]; then
-			echo "mount mmcblk1" >> /tmp/failed
+			echo "mount tssdcarda" >> /tmp/failed
 		fi
 		xzcat /mnt/usb/sdimage.tar.xz | tar -x -C /mnt/sd
 		if [ $? != 0 ]; then
-			echo "tar mmcblk1" >> /tmp/failed
+			echo "tar tssdcarda" >> /tmp/failed
 		fi
 		sync
 
@@ -47,7 +68,7 @@ EOF
 			LINES=$(wc -l /mnt/sd/md5sums.txt  | cut -f 1 -d ' ')
 			if [ $LINES = 0 ]; then
 				echo "==========MD5sum file blank==========="
-				echo "mmcblk1 md5sum file is blank" >> /tmp/failed
+				echo "tssdcarda1 md5sum file is blank" >> /tmp/failed
 			fi
 			# Drop caches so we have to reread all files
 			echo 3 > /proc/sys/vm/drop_caches
@@ -55,7 +76,7 @@ EOF
 			md5sum -c md5sums.txt > /tmp/sd_md5sums
 			if [ $? != 0 ]; then
 				echo "==========SD VERIFY FAILED==========="
-				echo "mmcblk1 filesystem verify" >> /tmp/failed
+				echo "tssdcarda1 filesystem verify" >> /tmp/failed
 			fi
 			cd /
 		fi
@@ -65,13 +86,13 @@ EOF
 elif [ -e /mnt/usb/sdimage.dd.xz ]; then
 	echo "======= Writing SD card disk image ========"
 	(
-		xzcat /mnt/usb/sdimage.dd.xz | dd bs=4M of=/dev/mmcblk1
+		xzcat /mnt/usb/sdimage.dd.xz | dd bs=4M of=/dev/tssdcarda
 		if [ -e /mnt/usb/sdimage.dd.md5 ]; then
 			BYTES="$(xzcat /mnt/usb/sdimage.dd.xz  | wc -c)"
 			EXPECTED="$(cat /mnt/usb/sdimage.dd.md5 | cut -f 1 -d ' ')"
-			ACTUAL=$(dd if=/dev/mmcblk1 bs=4M | dd bs=1 count=$BYTES | md5sum)
+			ACTUAL=$(dd if=/dev/tssdcarda bs=4M | dd bs=1 count=$BYTES | md5sum)
 			if [ "$ACTUAL" != "$EXPECTED" ]; then
-				echo "mmcblk1 dd verify" >> /tmp/failed
+				echo "tssdcarda dd verify" >> /tmp/failed
 			fi
 		fi
 	) > /tmp/logs/sd-writeimage 2>&1 &
@@ -177,7 +198,7 @@ EOF
 				if [ $? != 0 ]; then
 					echo "mount sda1" >> /tmp/failed
 				fi
-				tar xJf /mnt/usb/sataimage.tar.xz -C /mnt/sata/
+				xzcat /mnt/usb/sataimage.tar.xz | tar -x -C /mnt/sata/
 				if [ $? != 0 ]; then
 					echo "tar sda1" >> /tmp/failed
 				fi
@@ -213,7 +234,7 @@ EOF
 	fi
 fi
 
-### SPI (U-boot) ###
+### eMMC boot partition (U-boot) ###
 if [ -e /mnt/usb/u-boot.kwb ]; then
 	(
 		echo 0 > /sys/block/mmcblk0boot0/force_ro
@@ -244,6 +265,7 @@ sync
 wait
 
 # Blink green led if it works.  Blink red if bad things happened
+(
 if [ ! -e /tmp/failed ]; then
 	ts7800ctl -F
 	ts7800ctl -G
@@ -266,3 +288,4 @@ else
 		ts7800ctl -F
 	done
 fi
+) &
