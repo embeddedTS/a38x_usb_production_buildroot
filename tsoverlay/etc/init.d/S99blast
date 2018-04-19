@@ -1,7 +1,5 @@
 #!/bin/sh
 
-PATH="/bin:/sbin:/usr/bin:/usr/sbin"
-
 # Search for first usb drive with a blast.sh script
 while true; do
 	for x in a b c d e f g h i j k l m; do
@@ -13,7 +11,7 @@ while true; do
 		mount -o ro /dev/sd${x}1 /mnt/usb/
 		if [ -e /mnt/usb/blast.sh ]; then
 			/bin/sh /mnt/usb/blast.sh
-			break;
+			exit 0
 		fi
 	done
 done
